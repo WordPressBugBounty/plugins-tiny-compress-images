@@ -20,9 +20,9 @@
 
 abstract class Tiny_Compress {
 
-	const KEY_MISSING = 'Register an account or provide an API key first';
+	const KEY_MISSING  = 'Register an account or provide an API key first';
 	const FILE_MISSING = 'File does not exist';
-	const WRITE_ERROR = 'No permission to write to file';
+	const WRITE_ERROR  = 'No permission to write to file';
 
 	protected $after_compress_callback;
 
@@ -37,7 +37,7 @@ abstract class Tiny_Compress {
 				'NoHttpClient'
 			);
 		}
-		return new $class($api_key, $after_compress_callback);
+		return new $class( $api_key, $after_compress_callback );
 	}
 
 	/* Based on pricing April 2016. */
@@ -53,12 +53,12 @@ abstract class Tiny_Compress {
 		$this->after_compress_callback = $after_compress_callback;
 	}
 
-	public abstract function can_create_key();
-	public abstract function get_compression_count();
-	public abstract function get_remaining_credits();
-	public abstract function get_paying_state();
-	public abstract function get_email_address();
-	public abstract function get_key();
+	abstract public function can_create_key();
+	abstract public function get_compression_count();
+	abstract public function get_remaining_credits();
+	abstract public function get_paying_state();
+	abstract public function get_email_address();
+	abstract public function get_key();
 
 	public function limit_reached() {
 		return $this->get_remaining_credits() === 0;
@@ -67,12 +67,12 @@ abstract class Tiny_Compress {
 	public function get_status() {
 		if ( $this->get_key() == null ) {
 			return (object) array(
-				'ok' => false,
+				'ok'      => false,
 				'message' => self::KEY_MISSING,
 			);
 		}
 
-		$result = false;
+		$result  = false;
 		$message = null;
 
 		try {
@@ -88,7 +88,7 @@ abstract class Tiny_Compress {
 		$this->call_after_compress_callback();
 
 		return (object) array(
-			'ok' => $result,
+			'ok'      => $result,
 			'message' => $message,
 		);
 	}
@@ -99,14 +99,14 @@ abstract class Tiny_Compress {
 	 * @param [type] $file
 	 * @param array $resize_opts
 	 * @param array $preserve_opts
-	 * @param array{ convert: bool, convert_to: string } conversion options
+	 * @param array{ string } conversion options
 	 * @return void
 	 */
 	public function compress_file(
 		$file,
 		$resize_opts = array(),
 		$preserve_opts = array(),
-		$convert_opts = array()
+		$convert_to = array()
 	) {
 		if ( $this->get_key() == null ) {
 			throw new Tiny_Exception( self::KEY_MISSING, 'KeyError' );
@@ -131,7 +131,7 @@ abstract class Tiny_Compress {
 				$file_data,
 				$resize_opts,
 				$preserve_opts,
-				$convert_opts
+				$convert_to
 			);
 		} catch ( Tiny_Exception $err ) {
 			$this->call_after_compress_callback();
@@ -167,12 +167,12 @@ abstract class Tiny_Compress {
 		return $details;
 	}
 
-	protected abstract function validate();
-	protected abstract function compress(
+	abstract protected function validate();
+	abstract protected function compress(
 		$input,
 		$resize_options,
 		$preserve_options,
-		$convert_opts
+		$convert_to
 	);
 
 	protected static function identifier() {
@@ -205,14 +205,14 @@ abstract class Tiny_Compress {
 
 		if ( $total > 10000 ) {
 			$compressions = $total - 10000;
-			$cost += $compressions * 0.002;
-			$total -= $compressions;
+			$cost        += $compressions * 0.002;
+			$total       -= $compressions;
 		}
 
 		if ( $total > 500 ) {
 			$compressions = $total - 500;
-			$cost += $compressions * 0.009;
-			$total -= $compressions;
+			$cost        += $compressions * 0.009;
+			$total       -= $compressions;
 		}
 
 		return $cost;

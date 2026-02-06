@@ -25,7 +25,8 @@ class Tiny_Image_Size {
 	/* Used more than once and not trivial, so we are memoizing these */
 	private $_exists;
 	private $_file_size;
-	private $_duplicate = false;
+	private $_mime_type;
+	private $_duplicate         = false;
 	private $_duplicate_of_size = '';
 
 	public function __construct( $filename = null ) {
@@ -50,7 +51,7 @@ class Tiny_Image_Size {
 
 	public function add_tiny_meta( $response ) {
 		if ( isset( $this->meta['start'] ) ) {
-			$this->meta = $response;
+			$this->meta        = $response;
 			$this->meta['end'] = time();
 		}
 	}
@@ -58,9 +59,49 @@ class Tiny_Image_Size {
 	public function add_tiny_meta_error( $exception ) {
 		if ( isset( $this->meta['start'] ) ) {
 			$this->meta = array(
-				'error'   => $exception->get_type(),
-				'message' => $exception->get_message(),
+				'error'     => $exception->get_type(),
+				'message'   => $exception->get_message(),
 				'timestamp' => time(),
+			);
+		}
+	}
+
+	/**
+	 * Marks the image size as compressed without actually processing it.
+	 *
+	 * This method simulates the compression process by creating metadata that
+	 * indicates the image has been processed, while keeping the original file
+	 * size and format unchanged. Useful for marking images as compressed when
+	 * they don't need actual compression or have been processed externally.
+	 *
+	 * @since 3.0.0
+	 *
+	 * @param bool $include_conversion Optional. Whether to include conversion metadata.
+	 *                                 When true, adds conversion data with current
+	 *                                 file information. Default false.
+	 * @return void
+	 */
+	public function mark_as_compressed( $include_conversion = false ) {
+
+		if ( ! $this->has_been_compressed() ) {
+			$this->add_tiny_meta_start();
+			$tiny_image_size_meta = array(
+				'input'  => array(
+					'size' => $this->filesize(),
+				),
+				'output' => array(
+					'size' => $this->filesize(),
+					'type' => $this->mimetype(),
+				),
+			);
+			$this->add_tiny_meta( $tiny_image_size_meta );
+		}
+
+		if ( ! $this->has_been_converted() && $include_conversion ) {
+			$this->meta['convert'] = array(
+				'size' => $this->filesize(),
+				'type' => $this->mimetype(),
+				'path' => $this->filename,
 			);
 		}
 	}
@@ -86,6 +127,18 @@ class Tiny_Image_Size {
 			}
 		}
 		return $this->_file_size;
+	}
+
+	public function mimetype() {
+		if ( is_null( $this->_mime_type ) ) {
+			if ( $this->exists() ) {
+				$file             = file_get_contents( $this->filename );
+				$this->_mime_type = Tiny_Helpers::get_mimetype( $file );
+			} else {
+				$this->_mime_type = 'application/octet-stream';
+			}
+		}
+		return $this->_mime_type;
 	}
 
 	public function exists() {
@@ -175,7 +228,7 @@ class Tiny_Image_Size {
 	}
 
 	public function mark_duplicate( $duplicate_size_name ) {
-		$this->_duplicate = true;
+		$this->_duplicate         = true;
 		$this->_duplicate_of_size = $duplicate_size_name;
 	}
 
@@ -194,7 +247,7 @@ class Tiny_Image_Size {
 	}
 
 	private function recently_started() {
-		$thirty_minutes_ago = date( 'U' ) - ( 60 * 30 );
+		$thirty_minutes_ago = gmdate( 'U' ) - ( 60 * 30 );
 		return (
 			isset( $this->meta['start'] ) &&
 			$this->meta['start'] > $thirty_minutes_ago

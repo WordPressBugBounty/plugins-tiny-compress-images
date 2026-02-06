@@ -1,4 +1,5 @@
 (function() {
+  const processedItems = [];
   var parallelCompressions = 5;
 
   function updateProgressBar(successFullCompressions) {
@@ -148,6 +149,14 @@
       return;
     }
 
+    const itemID = items[i].ID;
+    if (processedItems.includes(itemID)) {
+      const row = jQuery('#optimization-items tr').eq(parseInt(i, 10) + 1);
+      row.find('.status')
+        .attr('data-status', 'skipped-duplicate')
+        .html('<span class="icon dashicons dashicons-no alert"></span>' + tinyCompress.L10nDuplicate);
+    }
+
     var row = jQuery('#optimization-items tr').eq(parseInt(i, 10)+1);
     row.find('.status').removeClass('todo');
     row.find('.status').html('<span class="icon spinner"></span>' + tinyCompress.L10nCompressing).attr('data-status', 'compressing');
@@ -158,12 +167,13 @@
       data: {
         _nonce: tinyCompress.nonce,
         action: 'tiny_compress_image_for_bulk',
-        id: items[i].ID,
+        id: itemID,
         current_size: window.currentLibraryBytes
       },
       success: function(data) { bulkOptimizationCallback(null, data, items, i); },
       error: function(xhr, textStatus, errorThrown) { bulkOptimizationCallback(errorThrown, null, items, i, parallelCompressions); }
     });
+    processedItems.push(itemID);
     jQuery('#tiny-progress span').html(i + 1);
   }
 
@@ -176,6 +186,7 @@
     window.optimizationCancelled = false;
     window.totalRowsDrawn = 0;
     window.currentLibraryBytes = parseInt(jQuery('#optimized-library-size').data('bytes'), 10);
+    processedItems.splice(0, processedItems.length);
 
     jQuery('div.progress').css('animation', 'progress-bar 80s linear infinite');
     jQuery('div#optimization-spinner').css('display', 'inline-block');
@@ -190,20 +201,19 @@
   }
 
   function drawSomeRows(items, rowsToDraw) {
-    var list = jQuery('#optimization-items tbody');
-    var row;
-    for (var drawNow = window.totalRowsDrawn; drawNow < Math.min( rowsToDraw + window.totalRowsDrawn, items.length); drawNow++) {
-      row = jQuery('<tr class=\'media-item\'>' +
-          '<th class=\'thumbnail\' />' +
-          '<td class=\'column-primary name\' />' +
-          '<td class=\'column-author initial-size\' data-colname=\'' + tinyCompress.L10nInitialSize + '\' ></>' +
-          '<td class=\'column-author optimized-size\' data-colname=\'' + tinyCompress.L10nCurrentSize + '\' ></>' +
-          '<td class=\'column-author savings\' data-colname=\'' + tinyCompress.L10nSavings + '\' ></>' +
-          '<td class=\'column-author status todo\' data-colname=\'' + tinyCompress.L10nStatus + '\' />' +
-        '</tr>');
-      row.find('.status').html(tinyCompress.L10nWaiting).attr('data-status', 'waiting');
-      row.find('.name').html(items[drawNow].post_title);
-      list.append(row);
+    const list = jQuery('#optimization-items tbody');
+    let drawNow = window.totalRowsDrawn;
+    for(let i = drawNow;i < Math.min(rowsToDraw + window.totalRowsDrawn, items.length); i++) {
+      const tableRow = `<tr class="media-item">
+        <td class="thumbnail" />
+        <td class="column-primary name">${items[i].post_title}</th>
+        <td class="column-author initial-size" data-colname="${tinyCompress.L10nInitialSize}" />
+        <td class="column-author optimized-size" data-colname="${tinyCompress.L10nCurrentSize}" />
+        <td class="column-author savings" data-colname="${tinyCompress.L10nSavings}" />
+        <td class="column-author status" data-testid="bulk-item-status-${i}" data-colname="${tinyCompress.L10nStatus}" data-status="waiting">${tinyCompress.L10nWaiting}</td>
+      </tr>`;
+      list.append(tableRow);
+      drawNow = i;
     }
     window.totalRowsDrawn = drawNow;
   }
