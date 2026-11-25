@@ -8,7 +8,7 @@
  */
 
 $available_sizes              = array_keys( $this->settings->get_sizes() );
-$conversion_enabled           = $this->settings->get_conversion_enabled();
+$conversion_enabled           = $tiny_image->can_be_converted();
 $active_sizes                 = $this->settings->get_sizes();
 $backup_enabled               = $this->settings->get_backup_enabled();
 $active_tinify_sizes          = $this->settings->get_active_tinify_sizes();
@@ -118,7 +118,7 @@ ksort( $size_exists );
 		/* translators: %s is the image filename */
 		$modal_title = sprintf( __( 'Compression details for %s', 'tiny-compress-images' ), $tiny_image->get_name() );
 		?>
-		<a class="thickbox message" name="<?php echo esc_attr( $modal_title ); ?>" href="#TB_inline?width=700&amp;height=500&amp;inlineId=modal_<?php echo absint( $tiny_image->get_id() ); ?>">
+		<a class="message" href="#" data-dialog-id="modal_<?php echo absint( $tiny_image->get_id() ); ?>">
 			<?php esc_html_e( 'Details', 'tiny-compress-images' ); ?>
 		</a>
 	</div>
@@ -132,7 +132,7 @@ ksort( $size_exists );
 		<button type="button" class="tiny-mark-as-compressed button button-small button-secondary" data-id="<?php echo absint( $tiny_image->get_id() ); ?>">
 			<?php esc_html_e( 'Mark as Compressed', 'tiny-compress-images' ); ?>
 		</button>
-	<?php } elseif ( $active['unconverted'] > 0 && $tiny_image->can_be_converted() ) { ?>
+	<?php } elseif ( $active['unconverted'] > 0 && $conversion_enabled ) { ?>
 		<button type="button" class="tiny-compress button button-small button-primary" data-id="<?php echo absint( $tiny_image->get_id() ); ?>">
 			<?php esc_html_e( 'Convert', 'tiny-compress-images' ); ?>
 		</button>
@@ -142,7 +142,17 @@ ksort( $size_exists );
 	<?php } ?>
 </div>
 
-<div class="modal" id="modal_<?php echo absint( $tiny_image->get_id() ); ?>">
+<dialog
+	class="tiny-dialog tiny-details-dialog"
+	id="modal_<?php echo absint( $tiny_image->get_id() ); ?>"
+	aria-labelledby="modal_<?php echo absint( $tiny_image->get_id() ); ?>_title"
+>
+	<div class="tiny-dialog-header">
+		<strong class="tiny-dialog-title" id="modal_<?php echo absint( $tiny_image->get_id() ); ?>_title"><?php echo esc_html( $modal_title ); ?></strong>
+		<button type="button" class="button-link tiny-dialog-close" data-dialog-close aria-label="<?php esc_attr_e( 'Close', 'tiny-compress-images' ); ?>">
+			<span class="dashicons dashicons-no-alt" aria-hidden="true"></span>
+		</button>
+	</div>
 	<div class="tiny-compression-details">
 		<table>
 			<tr>
@@ -265,4 +275,4 @@ ksort( $size_exists );
 			?>
 		</p>
 	</div>
-</div>
+</dialog>

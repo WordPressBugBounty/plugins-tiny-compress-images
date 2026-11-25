@@ -1,0 +1,248 @@
+<?php
+/*
+* Tiny Compress Images - WordPress plugin.
+* Copyright (C) 2015-2023 Tinify B.V.
+*
+* This program is free software; you can redistribute it and/or modify it
+* under the terms of the GNU General Public License as published by the Free
+* Software Foundation; either version 2 of the License, or (at your option)
+* any later version.
+*
+* This program is distributed in the hope that it will be useful, but WITHOUT
+* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+* FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+* more details.
+*
+* You should have received a copy of the GNU General Public License along
+* with this program; if not, write to the Free Software Foundation, Inc., 51
+* Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+*/
+class Tiny_Dashboard extends Tiny_WP_Base {
+
+	/**
+	 * @var Tiny_Settings settings
+	 */
+	private $settings;
+
+	/**
+	 * @var Tiny_Background_Optimize
+	 */
+	private $background_optimizer;
+
+	/**
+	 * @param Tiny_Settings            $settings
+	 * @param Tiny_Background_Optimize $background_optimizer
+	 */
+	public function __construct( $settings, $background_optimizer ) {
+		parent::__construct();
+		$this->settings             = $settings;
+		$this->background_optimizer = $background_optimizer;
+	}
+
+	public function ajax_init() {
+		add_action(
+			'wp_ajax_tiny_dashboard_widget',
+			array( $this, 'ajax_dashboard_widget' )
+		);
+	}
+
+	public function admin_init() {
+		if ( current_user_can( 'upload_files' ) ) {
+			add_action(
+				'wp_dashboard_setup',
+				array( $this, 'add_dashboard_widget' )
+			);
+		}
+	}
+
+	public function add_dashboard_widget() {
+		wp_enqueue_style(
+			self::NAME . '_dashboard_widget',
+			plugins_url( '/css/dashboard-widget.css', __FILE__ ),
+			array(),
+			Tiny_Plugin::version()
+		);
+
+		wp_enqueue_script(
+			self::NAME . '_dashboard_widget',
+			plugins_url( '/js/dashboard-widget.js', __FILE__ ),
+			array(),
+			Tiny_Plugin::version(),
+			true
+		);
+
+		wp_add_dashboard_widget(
+			$this->get_prefixed_name( 'dashboard_widget' ),
+			esc_html__( 'TinyPNG - JPEG, PNG & WebP image compression', 'tiny-compress-images' ),
+			array( $this, 'add_widget_view' )
+		);
+	}
+
+	/**
+	 * The statistics scan the whole library, so the dashboard shows a spinner
+	 * and the widget JS fetches the real content from ajax_dashboard_widget().
+	 */
+	public function add_widget_view() {
+		include __DIR__ . '/views/dashboard-widget-loading.php';
+	}
+
+	public function ajax_dashboard_widget() {
+		if ( ! check_ajax_referer( 'tiny-dashboard-widget', '_nonce', false ) ||
+			! current_user_can( 'upload_files' ) ) {
+			status_header( 403 );
+			wp_die( -1, 403 );
+		}
+
+		$stats  = Tiny_Bulk_Optimization::get_optimization_statistics( $this->settings );
+		$widget = $this->get_widget_data( $stats );
+		include __DIR__ . '/views/dashboard-widget.php';
+		wp_die();
+	}
+
+	/**
+	 * Logic for the view
+	 *
+	 * @param array $optimization_stats See Tiny_Bulk_Optimization::get_optimization_statistics().
+	 * @return array
+	 */
+	public function get_widget_data( $optimization_stats ) {
+		$images_total     = max( 0, intval( $optimization_stats['uploaded-images'] ) );
+		$images_remaining = min(
+			$images_total,
+			count( $optimization_stats['available-for-optimization'] )
+		);
+		$images_optimized = $images_total - $images_remaining;
+		$bytes_saved      = $optimization_stats['unoptimized-library-size']
+			- $optimization_stats['optimized-library-size'];
+
+		$percentage = $images_total > 0
+			? intval( floor( $images_optimized / $images_total * 100 ) )
+			: 0;
+
+		$estimated_credit_use = intval( $optimization_stats['estimated_credit_use'] );
+
+		// Only free accounts have a limited number of credits, including
+		// free accounts that bought a credit bundle.
+		$remaining_credits   = $this->settings->get_remaining_credits();
+		$has_limited_credits = $this->settings->is_on_free_plan() &&
+			is_numeric( $remaining_credits );
+		$remaining_credits   = $has_limited_credits ? intval( $remaining_credits ) : null;
+
+		// Paid accounts get the same free credits each month and pay per
+		// compression once those are used.
+		$free_credits_left = null;
+		if ( ! $this->settings->is_on_free_plan() ) {
+			$compression_count = intval( $this->settings->get_compression_count() );
+			$free_credits_left = max(
+				0,
+				Tiny_Config::MONTHLY_FREE_COMPRESSIONS - $compression_count
+			);
+		}
+
+		// How many of the remaining images the credits still cover.
+		$images_affordable = 0;
+		if ( $has_limited_credits && $images_remaining > 0 && $estimated_credit_use > 0 ) {
+			$images_affordable = intval(
+				floor( $remaining_credits / ( $estimated_credit_use / $images_remaining ) )
+			);
+		}
+
+		$seconds_left = null;
+		if ( ! $this->settings->has_api_key() ) {
+			$state = 'not_connected';
+		} elseif ( $this->settings->refresh_api_key_pending() ) {
+			$state = 'pending';
+		} elseif ( 0 === $images_total ) {
+			$state = 'empty';
+		} elseif ( $this->background_optimizer->is_running() ) {
+			$state = 'compressing';
+
+			$seconds_left = intval(
+				round( $estimated_credit_use / Tiny_Background_Optimize::WORKERS )
+			);
+		} elseif ( 0 === $images_remaining ) {
+			$state = 'done';
+		} elseif ( 0 === $remaining_credits ) {
+			$state = 'out_of_credits';
+		} elseif ( $has_limited_credits && $estimated_credit_use > $remaining_credits ) {
+			$state = 'credits_short';
+		} else {
+			$state = 'ready';
+		}
+
+		return array(
+			'state'                => $state,
+			'images_optimized'     => $images_optimized,
+			'images_total'         => $images_total,
+			'images_remaining'     => $images_remaining,
+			'images_affordable'    => $images_affordable,
+			'bytes_saved'          => max( 0, intval( $bytes_saved ) ),
+			'percentage'           => $percentage,
+			'estimated_credit_use' => $estimated_credit_use,
+			'remaining_credits'    => $remaining_credits,
+			'free_credits_left'    => $free_credits_left,
+			'seconds_left'         => $seconds_left,
+			'email_address'        => $this->settings->get_email_address(),
+			'auto_compress'        => $this->settings->auto_compress_enabled(),
+		);
+	}
+
+	/**
+	 * The badge and panda of a state, shared by the dashboard widget and the
+	 * bulk optimization page. Only the bulk optimization page has the
+	 * no_sizes state. The panda is a file name in images/widget.
+	 *
+	 * @param string $state A state from get_widget_data(), or no_sizes.
+	 * @return array{badge_colour: string, badge_text: string, panda: string}
+	 */
+	public static function get_state_badge_and_panda( $state ) {
+		$badges_and_pandas = array(
+			'not_connected'  => array(
+				'badge_colour' => 'red',
+				'badge_text'   => __( 'Not connected', 'tiny-compress-images' ),
+				'panda'        => 'panda-juggle',
+			),
+			'pending'        => array(
+				'badge_colour' => 'amber',
+				'badge_text'   => __( 'Waiting for activation', 'tiny-compress-images' ),
+				'panda'        => 'panda-unbox',
+			),
+			'empty'          => array(
+				'badge_colour' => 'amber',
+				'badge_text'   => __( 'Nothing to compress', 'tiny-compress-images' ),
+				'panda'        => 'panda-astronaut',
+			),
+			'no_sizes'       => array(
+				'badge_colour' => 'amber',
+				'badge_text'   => __( 'Nothing to compress', 'tiny-compress-images' ),
+				'panda'        => 'panda-astronaut',
+			),
+			'ready'          => array(
+				'badge_colour' => 'green',
+				'badge_text'   => __( 'Ready to compress', 'tiny-compress-images' ),
+				'panda'        => 'panda-skate',
+			),
+			'compressing'    => array(
+				'badge_colour' => 'green',
+				'badge_text'   => __( 'Compressing', 'tiny-compress-images' ),
+				'panda'        => 'panda-rocket',
+			),
+			'done'           => array(
+				'badge_colour' => 'green',
+				'badge_text'   => __( 'All done', 'tiny-compress-images' ),
+				'panda'        => 'panda-duck',
+			),
+			'credits_short'  => array(
+				'badge_colour' => 'amber',
+				'badge_text'   => __( 'Not enough credits', 'tiny-compress-images' ),
+				'panda'        => 'panda-coffee',
+			),
+			'out_of_credits' => array(
+				'badge_colour' => 'red',
+				'badge_text'   => __( 'Out of credits', 'tiny-compress-images' ),
+				'panda'        => 'panda-coffee',
+			),
+		);
+		return $badges_and_pandas[ $state ];
+	}
+}

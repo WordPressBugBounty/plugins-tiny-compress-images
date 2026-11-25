@@ -50,8 +50,13 @@ class Tiny_Image {
 		if ( ! is_array( $this->wp_metadata ) ) {
 			$this->wp_metadata = wp_get_attachment_metadata( $this->id );
 		}
+		if ( ! is_array( $this->wp_metadata ) && 'image/jxl' === $this->get_mime_type() ) {
+			// Before WordPress 6.0, a JPEG XL has no attachment metadata.
+			$this->wp_metadata = array();
+		}
 
-		if ( ! is_array( $this->wp_metadata ) || ! isset( $this->wp_metadata['file'] ) ) {
+		$file = $this->get_metadata_file();
+		if ( null === $file ) {
 			/*
 			No file metadata found, this might be another plugin messing with
 				metadata. Simply ignore this! */
@@ -60,7 +65,7 @@ class Tiny_Image {
 
 		$upload_dir  = wp_upload_dir();
 		$path_prefix = $upload_dir['basedir'] . '/';
-		$path_info   = pathinfo( $this->wp_metadata['file'] );
+		$path_info   = pathinfo( $file );
 		if ( isset( $path_info['dirname'] ) ) {
 			$path_prefix .= $path_info['dirname'] . '/';
 		}
@@ -68,7 +73,7 @@ class Tiny_Image {
 		/*
 		Do not use pathinfo for getting the filename.
 			It doesn't work when the filename starts with a special character. */
-		$path_parts                    = explode( '/', $this->wp_metadata['file'] );
+		$path_parts                    = explode( '/', $file );
 		$this->name                    = end( $path_parts );
 		$filename                      = $path_prefix . $this->name;
 		$this->sizes[ self::ORIGINAL ] = new Tiny_Image_Size( $filename );
@@ -98,6 +103,26 @@ class Tiny_Image {
 
 		// Update the metadata with only the valid sizes found
 		$this->wp_metadata['sizes'] = $sanitized_sizes;
+	}
+
+	/**
+	 * WordPress cannot read JPEG XL, so the metadata of a JXL attachment
+	 * holds no file. Its attached file is used instead.
+	 *
+	 * @return string|null the file relative to the upload directory
+	 */
+	private function get_metadata_file() {
+		if ( ! is_array( $this->wp_metadata ) ) {
+			return null;
+		}
+		if ( isset( $this->wp_metadata['file'] ) ) {
+			return $this->wp_metadata['file'];
+		}
+		if ( 'image/jxl' === $this->get_mime_type() ) {
+			$file = get_post_meta( $this->id, '_wp_attached_file', true );
+			return $file ? $file : null;
+		}
+		return null;
 	}
 
 	private function detect_duplicates( $active_sizes, $active_tinify_sizes ) {
@@ -206,12 +231,18 @@ class Tiny_Image {
 		return $this->wp_metadata;
 	}
 
+	/**
+	 * The attachment mime types the plugin compresses. A function instead of
+	 * a constant, because PHP 5.4 and 5.5 do not allow arrays in constants.
+	 *
+	 * @return string[] mime types
+	 */
+	public static function compressible_mime_types() {
+		return array( 'image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/jxl' );
+	}
+
 	public function file_type_allowed() {
-		return in_array(
-			$this->get_mime_type(),
-			array( 'image/jpeg', 'image/png', 'image/webp' ),
-			true
-		);
+		return in_array( $this->get_mime_type(), self::compressible_mime_types(), true );
 	}
 
 	public function get_mime_type() {
@@ -228,6 +259,14 @@ class Tiny_Image {
 		);
 
 		if ( $this->settings->get_compressor() === null || ! $this->file_type_allowed() ) {
+			Tiny_Logger::debug(
+				'compress skipped',
+				array(
+					'image_id'       => $this->id,
+					'has_compressor' => null !== $this->settings->get_compressor(),
+					'mime_type'      => $this->get_mime_type(),
+				)
+			);
 			return;
 		}
 
@@ -254,13 +293,37 @@ class Tiny_Image {
 
 		$active_tinify_sizes = $this->settings->get_active_tinify_sizes();
 
-		if ( $this->settings->get_conversion_enabled() ) {
+		if ( $this->conversion_applies() ) {
 			$uncompressed_sizes = $this->filter_image_sizes( 'uncompressed', $active_tinify_sizes );
 			$unconverted_sizes  = $this->filter_image_sizes( 'unconverted', $active_tinify_sizes );
 
 			$unprocessed_sizes = $uncompressed_sizes + $unconverted_sizes;
 		} else {
 			$unprocessed_sizes = $this->filter_image_sizes( 'uncompressed', $active_tinify_sizes );
+		}
+
+		if ( empty( $unprocessed_sizes ) ) {
+			$sizes = array();
+			foreach ( $active_tinify_sizes as $size_name ) {
+				if ( ! isset( $this->sizes[ $size_name ] ) ) {
+					$sizes[ $size_name ] = 'not in metadata';
+					continue;
+				}
+				$size                = $this->sizes[ $size_name ];
+				$sizes[ $size_name ] = array(
+					'filename'            => $size->filename,
+					'exists'              => $size->exists(),
+					'is_duplicate'        => $size->is_duplicate(),
+					'has_been_compressed' => $size->has_been_compressed(),
+				);
+			}
+			Tiny_Logger::debug(
+				'compress found no sizes to process',
+				array(
+					'image_id' => $this->id,
+					'sizes'    => $sizes,
+				)
+			);
 		}
 
 		$compressor = $this->settings->get_compressor();
@@ -341,7 +404,58 @@ class Tiny_Image {
 		);
 	}
 
-	public function delete_converted_image() {
+	/**
+	 * Deletes the converted images and the backup, unless another attachment
+	 * uses the same file.
+	 *
+	 * @since 3.9.0
+	 *
+	 * @return void
+	 */
+	public function cleanup_image() {
+		if ( $this->is_used_by_other_attachment() ) {
+			return;
+		}
+
+		$this->delete_converted_image();
+		$this->delete_backup();
+	}
+
+	/**
+	 * Checks if another attachment. A trashed attachment still uses the file.
+	 *
+	 * @since 3.9.0
+	 *
+	 * @return bool
+	 */
+	private function is_used_by_other_attachment() {
+		$file = $this->get_metadata_file();
+		if ( empty( $file ) ) {
+			// fallback to image in metadata if tiny metadata does not have an image
+			$file = get_post_meta( $this->id, '_wp_attached_file', true );
+		}
+		if ( empty( $file ) ) {
+			return false;
+		}
+
+		// phpcs:disable WordPress.DB.SlowDBQuery -- Runs only when an attachment is deleted.
+		$other_attachments = get_posts(
+			array(
+				'post_type'    => 'attachment',
+				'post_status'  => array( 'inherit', 'private', 'trash' ),
+				'meta_key'     => '_wp_attached_file',
+				'meta_value'   => $file,
+				'post__not_in' => array( $this->id ),
+				'fields'       => 'ids',
+				'numberposts'  => 1,
+			)
+		);
+		// phpcs:enable
+
+		return ! empty( $other_attachments );
+	}
+
+	private function delete_converted_image() {
 		$sizes = $this->get_image_sizes();
 		foreach ( $sizes as $size ) {
 			$size->delete_converted_image_size();
@@ -534,7 +648,7 @@ class Tiny_Image {
 		$this->statistics['image_sizes_optimized']        = 0;
 		$this->statistics['available_unoptimized_sizes']  = 0;
 
-		$conversion_enabled = $this->settings->get_conversion_enabled();
+		$conversion_enabled = $this->conversion_applies();
 
 		foreach ( $this->sizes as $size_name => $size ) {
 			// skip duplicates or inactive sizes
@@ -575,7 +689,7 @@ class Tiny_Image {
 			if ( $is_active_size ) {
 				if ( $size->has_been_converted() ) {
 					++$this->statistics['image_sizes_converted'];
-				} else {
+				} elseif ( ! $this->is_avif() ) {
 					++$this->statistics['available_unconverted_sizes'];
 				}
 
@@ -616,7 +730,22 @@ class Tiny_Image {
 	}
 
 	public function can_be_converted() {
-		return $this->settings->get_conversion_enabled() && $this->file_type_allowed();
+		return $this->conversion_applies() && $this->file_type_allowed();
+	}
+
+	/**
+	 * A WebP or AVIF copy of an AVIF is not worth a credit, so an AVIF is
+	 * only compressed. The extension is checked instead of the mime type,
+	 * so that bulk statistics need no query per image.
+	 *
+	 * @return bool true if the image is an AVIF
+	 */
+	private function is_avif() {
+		return 'avif' === strtolower( pathinfo( (string) $this->name, PATHINFO_EXTENSION ) );
+	}
+
+	private function conversion_applies() {
+		return $this->settings->get_conversion_enabled() && ! $this->is_avif();
 	}
 
 	/**
@@ -627,14 +756,13 @@ class Tiny_Image {
 	 *
 	 * @since 3.6.4
 	 *
-	 * @return array{string} mimetypes to which the image should be converted to
+	 * @return string[] mimetypes to which the image should be converted to, empty when conversion does not apply
 	 */
 	private function convert_to() {
-		$convert_settings = $this->settings->get_conversion_options();
-		if ( ! $convert_settings['convert'] ) {
-			// conversion is off so return no mimetypes to convert to
+		if ( ! $this->conversion_applies() ) {
 			return array();
 		}
+		$convert_settings = $this->settings->get_conversion_options();
 
 		foreach ( $this->sizes as $size ) {
 			if ( ! $size->converted() ) {
@@ -662,11 +790,11 @@ class Tiny_Image {
 	public function mark_as_compressed() {
 		$this->parse_tiny_metadata();
 
-		$conversion_enabled = $this->settings->get_conversion_enabled();
+		$conversion_enabled = $this->conversion_applies();
 
 		$active_tinify_sizes = $this->settings->get_active_tinify_sizes();
 
-		if ( $this->settings->get_conversion_enabled() ) {
+		if ( $conversion_enabled ) {
 			$uncompressed_sizes = $this->filter_image_sizes( 'uncompressed', $active_tinify_sizes );
 			$unconverted_sizes  = $this->filter_image_sizes( 'unconverted', $active_tinify_sizes );
 
@@ -884,7 +1012,7 @@ class Tiny_Image {
 	 *
 	 * @return bool True on success or if no backup exists, false on deletion failure.
 	 */
-	public function delete_backup() {
+	private function delete_backup() {
 		$backup_file_path = $this->get_backup_path();
 		if ( false === $backup_file_path ) {
 			return true;

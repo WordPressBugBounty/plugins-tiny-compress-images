@@ -24,7 +24,7 @@
  * - inserting/removing rules from htaccess
  *
  * We are only updating rules when:
- * - updating the option convert_format
+ * - adding or updating the option convert_format
  * - uninstalling the plug-in
  */
 class Tiny_Apache_Rewrite extends Tiny_WP_Base {
@@ -35,6 +35,19 @@ class Tiny_Apache_Rewrite extends Tiny_WP_Base {
 	 * @var string
 	 */
 	const MARKER = 'tiny-compress-images';
+
+	/**
+	 * Installs the htaccess rules when the option convert_format is saved
+	 * for the first time, which adds it instead of updating it.
+	 * hooked into `add_option_tinypng_convert_format`
+	 *
+	 * @param string $option
+	 * @param mixed  $value
+	 * @return void
+	 */
+	public static function toggle_rules_for_new_option( $option, $value ) {
+		self::toggle_rules( null, $value, $option );
+	}
 
 	/**
 	 * Installs or uninstalls the htaccess rules
@@ -70,6 +83,21 @@ class Tiny_Apache_Rewrite extends Tiny_WP_Base {
 	}
 
 	/**
+	 * Reinstalls the rules when images are delivered with htaccess, so a
+	 * plugin update can change the installed rules.
+	 *
+	 * @return void
+	 */
+	public static function refresh_rules() {
+		$convert_format = get_option( 'tinypng_convert_format' );
+		if ( isset( $convert_format['delivery_method'] ) &&
+			'htaccess' === $convert_format['delivery_method'] ) {
+			$installed = self::install_rules();
+			Tiny_Logger::debug( 'htaccess rules refreshed: ' . $installed );
+		}
+	}
+
+	/**
 	 * Generate .htaccess rewrite rules for serving WebP and AVIF images.
 	 *
 	 * @return string The .htaccess rules
@@ -86,7 +114,7 @@ class Tiny_Apache_Rewrite extends Tiny_WP_Base {
 		$rules[] = '</IfModule>';
 
 		$rules[] = '<IfModule mod_headers.c>';
-		$rules[] = '<FilesMatch "\.(jpe?g|png)$">';
+		$rules[] = '<FilesMatch "\.(jpe?g|png|jxl)$">';
 		$rules[] = 'Header append Vary Accept';
 		$rules[] = '</FilesMatch>';
 		$rules[] = '</IfModule>';
@@ -107,10 +135,10 @@ class Tiny_Apache_Rewrite extends Tiny_WP_Base {
 	private static function get_avif_rules() {
 		$rules   = array();
 		$rules[] = 'RewriteCond %{HTTP_ACCEPT} image/avif';
-		$rules[] = 'RewriteCond %{REQUEST_URI} ^(.+)\.(?:jpe?g|png)$';
+		$rules[] = 'RewriteCond %{REQUEST_URI} ^(.+)\.(?:jpe?g|png|jxl)$';
 		$rules[] = 'RewriteCond %{DOCUMENT_ROOT}/%1.avif -f';
 		$rules[] = 'RewriteCond %{QUERY_STRING} !type=original';
-		$rules[] = 'RewriteRule (.+)\.(?:jpe?g|png)$ $1.avif [T=image/avif,L]';
+		$rules[] = 'RewriteRule (.+)\.(?:jpe?g|png|jxl)$ $1.avif [T=image/avif,L]';
 		return $rules;
 	}
 
@@ -122,10 +150,10 @@ class Tiny_Apache_Rewrite extends Tiny_WP_Base {
 	private static function get_webp_rules() {
 		$rules   = array();
 		$rules[] = 'RewriteCond %{HTTP_ACCEPT} image/webp';
-		$rules[] = 'RewriteCond %{REQUEST_URI} ^(.+)\.(?:jpe?g|png)$';
+		$rules[] = 'RewriteCond %{REQUEST_URI} ^(.+)\.(?:jpe?g|png|jxl)$';
 		$rules[] = 'RewriteCond %{DOCUMENT_ROOT}/%1.webp -f';
 		$rules[] = 'RewriteCond %{QUERY_STRING} !type=original';
-		$rules[] = 'RewriteRule (.+)\.(?:jpe?g|png)$ $1.webp [T=image/webp,L]';
+		$rules[] = 'RewriteRule (.+)\.(?:jpe?g|png|jxl)$ $1.webp [T=image/webp,L]';
 
 		return $rules;
 	}

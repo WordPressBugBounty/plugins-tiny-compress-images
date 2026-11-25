@@ -24,14 +24,12 @@ class Tiny_Bulk_Optimization {
 	const PAGING_SIZE = 25000;
 
 	public static function get_optimization_statistics( $settings, $result = null ) {
-		$stats                                = array();
-		$stats['uploaded-images']             = 0;
-		$stats['optimized-image-sizes']       = 0;
-		$stats['available-unoptimized-sizes'] = 0;
-		$stats['optimized-library-size']      = 0;
-		$stats['unoptimized-library-size']    = 0;
-		$stats['estimated_credit_use']        = 0;
-		$stats['available-for-optimization']  = array();
+		$stats                               = array();
+		$stats['uploaded-images']            = 0;
+		$stats['optimized-library-size']     = 0;
+		$stats['unoptimized-library-size']   = 0;
+		$stats['estimated_credit_use']       = 0;
+		$stats['available-for-optimization'] = array();
 
 		if ( is_null( $result ) ) {
 			$last_image_id = null;
@@ -65,9 +63,11 @@ class Tiny_Bulk_Optimization {
 		global $wpdb;
 
 		// Retrieve posts that have "_wp_attachment_metadata" image metadata
-		// and optionally contain "tiny_compress_images" metadata.
-		$sql_start_id = ( $start_id ? " $wpdb->posts.ID < $start_id AND " : '' );
-		$query        =
+		// and optionally contain "tiny_compress_images" metadata. Before
+		// WordPress 6.0, a JPEG XL has no attachment metadata.
+		$sql_start_id   = ( $start_id ? " $wpdb->posts.ID < $start_id AND " : '' );
+		$sql_mime_types = "'" . implode( "', '", Tiny_Image::compressible_mime_types() ) . "'";
+		$query          =
 			"SELECT
 				$wpdb->posts.ID,
 				$wpdb->posts.post_title,
@@ -77,6 +77,7 @@ class Tiny_Bulk_Optimization {
 			FROM $wpdb->posts
 			LEFT JOIN $wpdb->postmeta
 				ON $wpdb->posts.ID = $wpdb->postmeta.post_id
+					AND $wpdb->postmeta.meta_key = '_wp_attachment_metadata'
 			LEFT JOIN $wpdb->postmeta AS wp_postmeta_file
 				ON $wpdb->posts.ID = wp_postmeta_file.post_id
 					AND wp_postmeta_file.meta_key = '_wp_attached_file'
@@ -86,12 +87,11 @@ class Tiny_Bulk_Optimization {
 			WHERE
 				$sql_start_id
 				$wpdb->posts.post_type = 'attachment'
+				AND $wpdb->posts.post_mime_type IN ( $sql_mime_types )
 				AND (
-					$wpdb->posts.post_mime_type = 'image/jpeg' OR
-					$wpdb->posts.post_mime_type = 'image/png' OR
-					$wpdb->posts.post_mime_type = 'image/webp'
+					$wpdb->postmeta.meta_id IS NOT NULL
+					OR $wpdb->posts.post_mime_type = 'image/jxl'
 				)
-				AND $wpdb->postmeta.meta_key = '_wp_attachment_metadata'
 			GROUP BY unique_attachment_name
 			ORDER BY ID DESC
 			LIMIT " . self::PAGING_SIZE;
@@ -125,11 +125,9 @@ class Tiny_Bulk_Optimization {
 			$image_stats = $tiny_image->get_statistics( $active_sizes, $active_tinify_sizes );
 
 			++$stats['uploaded-images'];
-			$stats['estimated_credit_use']        += $image_stats['available_uncompressed_sizes'];
-			$stats['available-unoptimized-sizes'] += $image_stats['available_unoptimized_sizes'];
-			$stats['optimized-image-sizes']       += $image_stats['image_sizes_optimized'];
-			$stats['optimized-library-size']      += $image_stats['compressed_total_size'];
-			$stats['unoptimized-library-size']    += $image_stats['initial_total_size'];
+			$stats['estimated_credit_use']     += $image_stats['available_uncompressed_sizes'];
+			$stats['optimized-library-size']   += $image_stats['compressed_total_size'];
+			$stats['unoptimized-library-size'] += $image_stats['initial_total_size'];
 
 			if ( $conversion_enabled ) {
 				$stats['estimated_credit_use'] += $image_stats['available_unconverted_sizes'];
@@ -144,10 +142,26 @@ class Tiny_Bulk_Optimization {
 				$stats['available-for-optimization'][] = array(
 					'ID'         => $result[ $i ]['ID'],
 					'post_title' => $result[ $i ]['post_title'],
+					'file'       => self::get_file_name( $wp_metadata ),
+					'sizes'      => $image_stats['available_unoptimized_sizes'],
+					'bytes'      => $image_stats['compressed_total_size'],
 				);
 			}
 		}// End for().
 
 		return $stats;
+	}
+
+	/**
+	 * The name of the file that was uploaded, also when WordPress scaled it down.
+	 */
+	private static function get_file_name( $wp_metadata ) {
+		if ( isset( $wp_metadata['original_image'] ) ) {
+			return wp_basename( $wp_metadata['original_image'] );
+		}
+		if ( isset( $wp_metadata['file'] ) ) {
+			return wp_basename( $wp_metadata['file'] );
+		}
+		return '';
 	}
 }

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: TinyPNG Image Optimization – Image Compression JPEG & PNG | Convert to WebP & AVIF
  * Description: Compress & convert images to WebP & AVIF automatically. Faster pages, improved SEO. Optimize 500 images/month free, no ads.
- * Version: 3.8.1
+ * Version: 3.9.0
  * Author: TinyPNG
  * Author URI: https://tinypng.com
  * Text Domain: tiny-compress-images
@@ -19,6 +19,7 @@ require dirname( __FILE__ ) . '/src/class-tiny-logger.php';
 require dirname( __FILE__ ) . '/src/class-tiny-diagnostics.php';
 require dirname( __FILE__ ) . '/src/class-tiny-compress.php';
 require dirname( __FILE__ ) . '/src/class-tiny-bulk-optimization.php';
+require dirname( __FILE__ ) . '/src/class-tiny-background-optimize.php';
 require dirname( __FILE__ ) . '/src/class-tiny-image-size.php';
 require dirname( __FILE__ ) . '/src/class-tiny-image.php';
 require dirname( __FILE__ ) . '/src/class-tiny-settings.php';
@@ -27,7 +28,9 @@ require dirname( __FILE__ ) . '/src/class-tiny-notices.php';
 require dirname( __FILE__ ) . '/src/class-tiny-cli.php';
 require dirname( __FILE__ ) . '/src/class-tiny-conversion.php';
 require dirname( __FILE__ ) . '/src/class-tiny-picture.php';
+require dirname( __FILE__ ) . '/src/class-tiny-dashboard.php';
 require dirname( __FILE__ ) . '/src/class-tiny-apache-rewrite.php';
+require dirname( __FILE__ ) . '/src/class-tiny-onboarding.php';
 require dirname( __FILE__ ) . '/src/compatibility/wpml/class-tiny-wpml.php';
 require dirname( __FILE__ ) . '/src/compatibility/as3cf/class-tiny-as3cf.php';
 require dirname( __FILE__ ) . '/src/compatibility/woocommerce/class-tiny-woocommerce.php';
@@ -46,3 +49,5 @@ register_uninstall_hook(
 	__FILE__,
 	array( 'Tiny_Plugin', 'uninstall' )
 );
+
+register_activation_hook(__FILE__, array('Tiny_Onboarding', 'on_activate') );
